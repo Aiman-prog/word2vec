@@ -1,0 +1,18 @@
+# dataset
+text8
+text8.zip
+
+# trained model
+model/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
