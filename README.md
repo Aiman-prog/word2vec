@@ -4,9 +4,9 @@ Skip-gram word2vec with negative sampling, implemented in pure NumPy.
 
 ## Implementation highlights
 
-- **Batched forward/backward pass** — processes pairs in mini-batches using vectorised NumPy ops (`einsum`) instead of looping over individual pairs, giving ~250× less Python overhead
+- **Batched forward/backward pass** — processes pairs in mini-batches using vectorised NumPy ops (`einsum`) instead of looping over individual pairs.
 - **Linear learning rate decay** — LR anneals from `lr` to `lr × 0.0001` over training, computed from a stable denominator (unsubsampled pair count) so the schedule doesn't drift when subsampling varies epoch to epoch
-- **Batch-level negative sampling** — negatives are drawn per batch (256 × k × 4 bytes ≈ 5 KB) rather than pre-allocating the entire epoch upfront (up to 3 GB on text8)
+- **Batch-level negative sampling** — negatives are drawn per batch rather than pre-allocating the entire epoch upfront.
 - **Frequent-word subsampling** — Mikolov's `t=1e-5` formula discards high-frequency tokens with probability proportional to their excess frequency, improving representation of rare words; skipped automatically on small corpora
 - **Pre-normalised embeddings** — `normalize_embeddings()` is called once after training to scale all word vectors to unit length, simplifying cosine similarity into a basic dot product; this removes the overhead of recomputing vector lengths on every query and allows nearest-neighbour and analogy searches to run as fast matrix multiplications
 - **Gradient check** — `test_gradient_check` verifies analytical gradients against numerical finite differences (central differences, ε=1e-5) to confirm the chain rule derivation is correct
