@@ -37,26 +37,26 @@ def forward_and_backward(center_indices, context_indices, neg_indices, W_in, W_o
         grad_u_negs: gradient for negative vectors,    shape (B, k, d)
     """
     # Forward pass: embedding lookup
-    V_batch = W_in[center_indices]    # (B, d)
-    U_batch = W_out[context_indices]  # (B, d)
-    U_neg   = W_out[neg_indices]      # (B, k, d)
+    V_batch = W_in[center_indices]   
+    U_batch = W_out[context_indices]  
+    U_neg   = W_out[neg_indices]      
 
     # compute dot product scores for positive and negative pairs
-    s_pos  = np.sum(V_batch * U_batch, axis=1)            # (B,)
-    s_negs = np.einsum('bd,bkd->bk', V_batch, U_neg)      # (B, k)
+    s_pos  = np.sum(V_batch * U_batch, axis=1)           
+    s_negs = np.einsum('bd,bkd->bk', V_batch, U_neg)      
 
     # apply sigmoid to scores to get probabilities
-    sig_pos  = sigmoid(s_pos)    # (B,)
-    sig_negs = sigmoid(s_negs)   # (B, k)
+    sig_pos  = sigmoid(s_pos)   
+    sig_negs = sigmoid(s_negs)   
 
-    # --- Calculate loss (per pair) ---
-    loss = -np.log(sig_pos) - np.sum(np.log(sigmoid(-s_negs)), axis=1)  # (B,)
+    # calculate loss (per pair) 
+    loss = -np.log(sig_pos) - np.sum(np.log(sigmoid(-s_negs)), axis=1)  
 
-    # --- Calculate gradients (via chain rule on the loss) ---
-    grad_u_o    = (sig_pos - 1)[:, None] * V_batch                        # (B, d)
-    grad_u_negs = sig_negs[:, :, None] * V_batch[:, None, :]              # (B, k, d)
+    # calculate gradients (via chain rule on the loss) 
+    grad_u_o    = (sig_pos - 1)[:, None] * V_batch                       
+    grad_u_negs = sig_negs[:, :, None] * V_batch[:, None, :]              
     grad_v_c    = (sig_pos - 1)[:, None] * U_batch \
-                + np.einsum('bk,bkd->bd', sig_negs, U_neg)                # (B, d)
+                + np.einsum('bk,bkd->bd', sig_negs, U_neg)                
 
     return loss, grad_v_c, grad_u_o, grad_u_negs
 
@@ -66,7 +66,7 @@ def sgd_update(W_in, W_out, center_indices, context_indices, neg_indices,
     """
     Update only the embedding rows involved in this batch.
     Modifies W_in and W_out in-place.
-    
+
     Args:
         W_in, W_out: embedding matrices (modified in-place)
         center_indices:  int array of shape (B,)
@@ -77,6 +77,6 @@ def sgd_update(W_in, W_out, center_indices, context_indices, neg_indices,
         grad_u_negs: shape (B, k, d)
         lr: learning rate array of shape (B,)
     """
-    W_in[center_indices]   -= lr[:, None]       * grad_v_c      # (B, d)
-    W_out[context_indices] -= lr[:, None]       * grad_u_o      # (B, d)
-    W_out[neg_indices]     -= lr[:, None, None] * grad_u_negs   # (B, k, d)
+    W_in[center_indices]   -= lr[:, None]       * grad_v_c      
+    W_out[context_indices] -= lr[:, None]       * grad_u_o      
+    W_out[neg_indices]     -= lr[:, None, None] * grad_u_negs   

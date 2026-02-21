@@ -4,7 +4,7 @@ import time
 import numpy as np
 from data import build_vocab, subsample_tokens, generate_training_pairs, get_noise_distribution
 from model import forward_and_backward, sgd_update
-from evaluate import cosine_similarity, find_nearest, analogy, normalize_embeddings
+from evaluate import find_nearest, analogy, normalize_embeddings
 
 
 def save_model(W_in, word2idx, path="model"):
@@ -68,44 +68,36 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
     """
     np.random.seed(seed)
 
-    # --- Setup: vocabulary, noise distribution ---
+    # Setup: vocabulary, noise distribution 
     word2idx, idx2word, word_counts, total_count = build_vocab(corpus, min_count=min_count)
     vocab_size = len(word2idx)
     print(f"Vocabulary size: {vocab_size:,}")
 
     noise_dist = get_noise_distribution(word_counts, word2idx)
 
-    # --- Initialise embeddings with small uniform random values ---
-    # Dividing by embedding_dim keeps initial scores (dot products) small,
-    # preventing sigmoid from saturating before training even starts
+    # Initialise embeddings with small uniform random values 
     W_in  = (np.random.rand(vocab_size, embedding_dim) - 0.5) / embedding_dim
     W_out = (np.random.rand(vocab_size, embedding_dim) - 0.5) / embedding_dim
 
-    # Pre-tokenize corpus to int IDs once — avoids re-splitting 17M tokens every epoch
+    # Pre-tokenize corpus to int IDs 
     raw_token_ids = np.array(
         [word2idx[t] for t in corpus.lower().split() if t in word2idx], dtype=np.int32
     )
 
-    # Pre-build keep_probs indexed by word ID — replaces per-token dict lookup in subsampling
+    # Pre-build keep_probs indexed by word ID 
     keep_probs = np.array(
         [min(1.0, np.sqrt(1e-5 * total_count / word_counts[idx2word[i]]))
          for i in range(vocab_size)],
         dtype=np.float32
     )
 
-    # Compute total_steps once from unsubsampled pairs — stable LR denominator
-    # regardless of how subsampling varies num_pairs each epoch.
     total_steps = num_epochs * len(generate_training_pairs(raw_token_ids, window_size))
     global_step = 0
 
     loss_history = []
 
-    # --- Training loop ---
     for epoch in range(num_epochs):
-        # Subsample frequent words each epoch — new random draws every epoch
-        # so the model sees different subsets and learns more robustly.
-        # Subsampling is only meaningful on large corpora; t=1e-5 would discard
-        # nearly everything on a tiny corpus, so we skip it when total_count < 10000.
+        # Subsampling is only meaningful on large corpora; skip it for tiny datasets.
         if total_count >= 10000:
             token_ids = subsample_tokens(raw_token_ids, keep_probs)
         else:
@@ -118,23 +110,23 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
         total_loss = 0.0
         num_pairs  = len(pairs)
 
-        # Pre-compute LR schedule for this epoch using the stable global step counter
+        # Linear decay, from initial value down to a floor (e.g. 0.0001 * initial).
         lr_schedule = learning_rate * (1.0 - np.arange(global_step, global_step + num_pairs) / total_steps)
-        lr_schedule = np.maximum(lr_schedule, learning_rate * 0.0001)  # floor
+
+        # Safety floor to prevent learning rate from reaching zero
+        lr_schedule = np.maximum(lr_schedule, learning_rate * 0.0001)  
         global_step += num_pairs
 
-        # Print progress every ~1% of batches (at least every batch for tiny corpora)
+        # Print progress 
         num_batches    = (num_pairs + batch_size - 1) // batch_size
         report_every   = max(1, num_batches // 100)
         pairs_done     = 0
         epoch_start    = time.time()
 
-        # Process pairs in batches — reduces Python function-call overhead ~250×
-        # vs calling forward_and_backward once per pair.
-        # Negatives are sampled per batch (256 × k × 4 bytes) rather than all at once
-        # (num_pairs × k × 4 bytes ≈ up to 3 GB on text8).
         for b in range(0, num_pairs, batch_size):
             sl  = slice(b, min(b + batch_size, num_pairs))
+
+            # Get actual number of pairs in this slice (might be less than batch_size at epoch end).
             bsz = sl.stop - sl.start
 
             neg_samples = np.random.choice(vocab_size, size=(bsz, num_negatives), p=noise_dist)
@@ -168,15 +160,12 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
 
 
 if __name__ == "__main__":
-    # Path to the text8 dataset.
-    # Download with: curl -O http://mattmahoney.net/dc/text8.zip && unzip text8.zip
     CORPUS_FILE = "text8"
-    MODEL_PATH  = "model/model"  # saves model/model.npy + model/model.json
+    MODEL_PATH  = "model/model"  
 
     os.makedirs("model", exist_ok=True)
 
     if os.path.exists(f"{MODEL_PATH}.npy"):
-        # Skip training and load the saved model directly
         W_in, word2idx, idx2word = load_model(MODEL_PATH)
     else:
         print(f"Loading corpus from '{CORPUS_FILE}'...")
@@ -204,9 +193,9 @@ if __name__ == "__main__":
 
     print("\n--- Analogies (a : b :: c : ?) ---")
     tests = [
-        ("man",   "king",   "woman"),   # → queen
-        ("france","paris",  "england"), # → london
-        ("good",  "better", "bad"),     # → worse
+        ("man",   "king",   "woman"),   
+        ("france","paris",  "england"), 
+        ("good",  "better", "bad"),    
     ]
     for a, b, c in tests:
         if all(w in word2idx for w in (a, b, c)):

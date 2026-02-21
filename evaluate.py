@@ -46,8 +46,8 @@ def find_nearest(word, word2idx, idx2word, W_normed, top_n=5):
         neighbors: list of (word, similarity_score) tuples, sorted by similarity descending
     """
     # Row is already unit length — cosine similarity is a plain matmul
-    query_norm   = W_normed[word2idx[word]]       # shape (d,)
-    similarities = W_normed @ query_norm           # shape (V,)
+    query_norm   = W_normed[word2idx[word]]       
+    similarities = W_normed @ query_norm           
 
     # Exclude the query word itself, then take top_n
     similarities[word2idx[word]] = -np.inf
@@ -76,7 +76,7 @@ def analogy(word_a, word_b, word_c, word2idx, idx2word, W_normed):
     vec = W_normed[word2idx[word_b]] - W_normed[word2idx[word_a]] + W_normed[word2idx[word_c]]
 
     vec_norm     = vec / np.linalg.norm(vec)
-    similarities = W_normed @ vec_norm                          # shape (V,)
+    similarities = W_normed @ vec_norm                       
 
     # Mask out input words so they can't be returned as the answer
     for w in (word_a, word_b, word_c):

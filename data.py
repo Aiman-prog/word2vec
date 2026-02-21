@@ -66,8 +66,6 @@ def generate_training_pairs(token_ids, window_size):
         pairs: numpy array of shape (N, 2) with (center_idx, context_idx) rows
     """
 
-    # Loop over each offset ±1..±window_size and slice the whole array at once,
-    # instead of a nested loop over every (i, j) pair.
     chunks = []
     for offset in range(1, window_size + 1):
         chunks.append(np.column_stack([token_ids[:-offset], token_ids[offset:]]))   # center left of context
