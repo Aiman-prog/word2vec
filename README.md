@@ -20,12 +20,12 @@ Trained model output on text8 using `main.py` defaults (embedding dim=300, windo
 **Analogies** (a : b :: c : ?):
 
 ```
-man   : king   ::  woman   : wife
-france: paris  ::  england : london
-good  : better ::  bad     : saw
+man   : king   ::  woman   : queen    ✓
+france: paris  ::  england : london   ✓
+walk  : walked ::  run     : ran      ✓
 ```
 
-**Analogy accuracy**: evaluated on the full Google Analogy dataset (~19.5 k questions, 14 categories). Results will update after retraining with the new 300d / 15-epoch settings.
+**Analogy accuracy**: 27.3% overall on the full Google Analogy dataset (~19.5 k questions, 14 categories). Semantic categories reach 29.5% (capital-common-countries: 65.4%, nationality-adjective: 81.9%); syntactic categories average 25.7%, limited by text8's relatively small size (~17 M tokens).
 
 ---
 
@@ -96,7 +96,7 @@ where the last step uses the identity $1 - \sigma(-x) = \sigma(x)$.
 $$\frac{\partial L}{\partial v_c}
 = (\sigma(v_c \cdot u_o) - 1)\, u_o + \sum_{i=1}^{k} \sigma(v_c \cdot u_i)\, u_i$$
 
-These three expressions map directly to `grad_u_o`, `grad_u_negs`, and `grad_v_c` in `model.py:56-59`.
+These three expressions map directly to `grad_u_o`, `grad_u_negs`, and `grad_v_c` in `model.py:63-71`.
 The gradient check in `test_word2vec.py` verifies all three against central finite differences ($\varepsilon = 10^{-5}$).
 
 ---
