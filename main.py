@@ -2,9 +2,10 @@ import os
 import json
 import time
 import numpy as np
+from tqdm.auto import tqdm
 from data import build_vocab, subsample_tokens, generate_training_pairs, get_noise_distribution
 from model import forward_and_backward, sgd_update
-from evaluate import find_nearest, analogy, normalize_embeddings
+from evaluate import find_nearest, analogy, normalize_embeddings, eval_analogies, load_analogy_dataset
 
 
 def save_model(W_in, word2idx, path="model"):
@@ -36,20 +37,26 @@ def load_model(path="model"):
 
 
 def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
-          learning_rate=0.1, num_epochs=100, seed=42, min_count=5, batch_size=256):
+          learning_rate=0.1, num_epochs=100, seed=42, min_count=5, batch_size=256,
+          random_window=False):
     """
     Full training pipeline for skip-gram with negative sampling.
 
     Steps:
-        1. Build vocabulary from corpus
-        2. Generate all (center, context) training pairs
-        3. Compute noise distribution for negative sampling
-        4. Initialize W_in and W_out with small random values
-        5. For each epoch:
-            - Shuffle training pairs
-            - For each pair: forward+backward pass, then SGD update
-            - Track and print average loss
-        6. Return trained embeddings
+        1. Build vocabulary (min_count filter) and noise distribution
+        2. Initialise W_in and W_out with small random values
+        3. Pre-tokenize corpus to integer IDs; build per-word keep probabilities
+           for frequent-word subsampling (Mikolov t=1e-5 formula)
+        4. For each epoch:
+            a. Subsample tokens (stochastically drop frequent words)
+            b. Regenerate (center, context) pairs from the subsampled sequence
+            c. Shuffle pairs, then process in mini-batches:
+               - Draw k negatives per pair from the noise distribution
+               - Forward pass: compute SGNS loss
+               - Backward pass: compute gradients via chain rule
+               - SGD update with per-step linearly decayed learning rate
+            d. Log average loss for the epoch
+        5. Return trained W_in embeddings
 
     Args:
         corpus: string, the training text
@@ -59,6 +66,7 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
         learning_rate: float, SGD learning rate
         num_epochs: int, number of training passes
         seed: int, random seed for reproducibility
+        random_window: bool, sample per-center window radius (Mikolov 2013 §3.1)
 
     Returns:
         W_in: trained input embeddings, shape (V, d)
@@ -84,14 +92,21 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
         [word2idx[t] for t in corpus.lower().split() if t in word2idx], dtype=np.int32
     )
 
-    # Pre-build keep_probs indexed by word ID 
+    # Pre-build keep_probs indexed by word ID.
+    # Formula: min(1, sqrt(t * N / f))  where t=1e-5,
+    # N=total token count, f=word frequency. Words above the threshold are
+    # kept with probability < 1; very frequent words are discarded most of the time.
     keep_probs = np.array(
         [min(1.0, np.sqrt(1e-5 * total_count / word_counts[idx2word[i]]))
          for i in range(vocab_size)],
         dtype=np.float32
     )
 
-    total_steps = num_epochs * len(generate_training_pairs(raw_token_ids, window_size))
+    # Pre-compute a stable epoch budget from the unsubsampled corpus (matches Mikolov:
+    # LR is tied to tokens visited including subsampled-away ones, not pairs generated).
+    full_pairs_per_epoch = len(generate_training_pairs(raw_token_ids, window_size,
+                                                       random_window=random_window))
+    total_steps = num_epochs * full_pairs_per_epoch
     global_step = 0
 
     loss_history = []
@@ -104,26 +119,30 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
             token_ids = raw_token_ids
 
         # Regenerate pairs from the (possibly subsampled) token sequence
-        pairs = generate_training_pairs(token_ids, window_size)
+        pairs = generate_training_pairs(token_ids, window_size, random_window=random_window)
         np.random.shuffle(pairs)
 
         total_loss = 0.0
         num_pairs  = len(pairs)
 
-        # Linear decay, from initial value down to a floor (e.g. 0.0001 * initial).
-        lr_schedule = learning_rate * (1.0 - np.arange(global_step, global_step + num_pairs) / total_steps)
+        # LR sweeps the full epoch's budget even if subsampling left fewer pairs.
+        # np.linspace distributes the budget evenly across however many pairs exist this epoch,
+        # matching Mikolov: LR progress counts all tokens including subsampled-away ones.
+        lr_schedule = learning_rate * (
+            1.0 - np.linspace(global_step, global_step + full_pairs_per_epoch,
+                              num=num_pairs, endpoint=False) / total_steps
+        )
+        lr_schedule = np.maximum(lr_schedule, learning_rate * 0.0001)
+        global_step += full_pairs_per_epoch  # advance by full epoch budget, not num_pairs
 
-        # Safety floor to prevent learning rate from reaching zero
-        lr_schedule = np.maximum(lr_schedule, learning_rate * 0.0001)  
-        global_step += num_pairs
+        pairs_done = 0
+        epoch_start = time.time()
 
-        # Print progress 
-        num_batches    = (num_pairs + batch_size - 1) // batch_size
-        report_every   = max(1, num_batches // 100)
-        pairs_done     = 0
-        epoch_start    = time.time()
+        pbar = tqdm(range(0, num_pairs, batch_size),
+                    desc=f"Epoch {epoch + 1}/{num_epochs}",
+                    unit="batch", leave=False)
 
-        for b in range(0, num_pairs, batch_size):
+        for b in pbar:
             sl  = slice(b, min(b + batch_size, num_pairs))
 
             # Get actual number of pairs in this slice (might be less than batch_size at epoch end).
@@ -139,22 +158,20 @@ def train(corpus, embedding_dim=5, window_size=1, num_negatives=2,
 
             total_loss += loss_batch.sum()
             pairs_done += bsz
-
-            batch_idx = b // batch_size
-            if batch_idx % report_every == 0:
-                pct    = int(100 * pairs_done / num_pairs)
-                filled = pct // 5
-                bar    = "=" * filled + ">" + " " * (20 - filled)
-                print(f"\r  Epoch {epoch + 1}/{num_epochs}  [{bar} {pct:3d}%]"
-                      f"  loss={total_loss / pairs_done:.4f}", end="", flush=True)
+            pbar.set_postfix(loss=f"{total_loss / pairs_done:.4f}")
 
         elapsed = time.time() - epoch_start
         mins, secs = divmod(int(elapsed), 60)
         time_str   = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
 
+        if num_pairs == 0:
+            print(f"Epoch {epoch + 1}/{num_epochs}  (no pairs after subsampling — skipped)")
+            loss_history.append(0.0)
+            continue
+
         avg_loss = total_loss / num_pairs
         loss_history.append(avg_loss)
-        print(f"\rEpoch {epoch + 1}/{num_epochs}  avg_loss={avg_loss:.4f}  ({time_str})          ")
+        print(f"Epoch {epoch + 1}/{num_epochs}  avg_loss={avg_loss:.4f}  ({time_str})")
 
     return W_in, word2idx, idx2word, loss_history
 
@@ -174,11 +191,12 @@ if __name__ == "__main__":
 
         W_in, word2idx, idx2word, _ = train(
             corpus,
-            embedding_dim=100,
+            embedding_dim=300,
             window_size=5,
             num_negatives=5,
             learning_rate=0.025,
-            num_epochs=5,
+            num_epochs=15,
+            random_window=True,
         )
         save_model(W_in, word2idx, MODEL_PATH)
 
@@ -193,11 +211,42 @@ if __name__ == "__main__":
 
     print("\n--- Analogies (a : b :: c : ?) ---")
     tests = [
-        ("man",   "king",   "woman"),   
-        ("france","paris",  "england"), 
-        ("good",  "better", "bad"),    
+        ("man",   "king",   "woman"),
+        ("france","paris",  "england"),
+        ("good",  "better", "bad"),
     ]
     for a, b, c in tests:
         if all(w in word2idx for w in (a, b, c)):
             result = analogy(a, b, c, word2idx, idx2word, W_normed)
             print(f"  {a} : {b}  ::  {c} : {result}")
+
+    ANALOGY_FILE = "questions-words.txt"
+    if os.path.exists(ANALOGY_FILE):
+        ANALOGY_TESTS = load_analogy_dataset(ANALOGY_FILE)
+        print(f"\n--- Analogy accuracy ({len(ANALOGY_TESTS):,} questions, Google Analogy dataset) ---")
+    else:
+        print("\n--- Analogy accuracy (16-question fallback; download questions-words.txt for full benchmark) ---")
+        ANALOGY_TESTS = [
+            # semantic: capital-country
+            ("berlin", "germany", "paris",   "france"),
+            ("berlin", "germany", "rome",    "italy"),
+            ("berlin", "germany", "madrid",  "spain"),
+            ("berlin", "germany", "athens",  "greece"),
+            ("berlin", "germany", "tokyo",   "japan"),
+            # semantic: gender
+            ("man",    "king",    "woman",   "queen"),
+            ("man",    "actor",   "woman",   "actress"),
+            ("man",    "father",  "woman",   "mother"),
+            ("man",    "husband", "woman",   "wife"),
+            ("man",    "son",     "woman",   "daughter"),
+            # syntactic: comparative
+            ("good",   "better",  "bad",     "worse"),
+            ("good",   "better",  "big",     "bigger"),
+            ("good",   "better",  "fast",    "faster"),
+            # syntactic: past tense
+            ("walk",   "walked",  "run",     "ran"),
+            ("walk",   "walked",  "go",      "went"),
+            ("look",   "looked",  "play",    "played"),
+        ]
+    acc, correct, total = eval_analogies(ANALOGY_TESTS, word2idx, idx2word, W_normed)
+    print(f"  {correct}/{total} correct  ({acc * 100:.1f}%)")

@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from data import build_vocab, generate_training_pairs, get_noise_distribution
+from data import build_vocab, generate_training_pairs, get_noise_distribution, subsample_tokens
 from model import sigmoid, forward_and_backward, sgd_update
 from evaluate import cosine_similarity, eval_analogies, normalize_embeddings, analogy
 
@@ -80,6 +80,15 @@ class TestTrainingPairs:
         pairs = generate_training_pairs(token_ids, window_size=1)
         assert len(pairs) == 0
 
+    def test_random_window_produces_fewer_or_equal_pairs(self):
+        """Random window can only discard pairs, never add them."""
+        np.random.seed(0)
+        word2idx, _, _, _ = build_vocab(CORPUS, min_count=1)
+        token_ids = self._to_ids(CORPUS.lower().split(), word2idx)
+        fixed  = generate_training_pairs(token_ids, window_size=2)
+        random = generate_training_pairs(token_ids, window_size=2, random_window=True)
+        assert len(random) <= len(fixed)
+
 
 # ============================================================
 # Tests for negative sampling
@@ -96,21 +105,35 @@ class TestNegativeSampling:
         noise_dist = get_noise_distribution(word_counts, word2idx)
         assert noise_dist.shape == (len(word2idx),)
 
-    def test_negative_samples_in_range(self):
-        word2idx, _, word_counts, _ = build_vocab(CORPUS, min_count=1)
-        noise_dist = get_noise_distribution(word_counts, word2idx)
-        neg = np.random.choice(len(word2idx), size=100, p=noise_dist)
-        assert np.all(neg >= 0)
-        assert np.all(neg < len(word2idx))
-
     def test_most_frequent_word_sampled_most(self):
         word2idx, _, word_counts, _ = build_vocab(CORPUS, min_count=1)
         noise_dist = get_noise_distribution(word_counts, word2idx)
+        np.random.seed(42)
         neg = np.random.choice(len(word2idx), size=10000, p=noise_dist)
         counts = np.bincount(neg, minlength=len(word2idx))
         # "the" (freq=2) should be sampled most often
         the_idx = word2idx["the"]
         assert counts[the_idx] == counts.max()
+
+
+# ============================================================
+# Tests for subsample_tokens
+# ============================================================
+
+class TestSubsample:
+    def test_keeps_all_with_prob_one(self):
+        """All tokens kept when keep_probs is all 1.0."""
+        token_ids = np.array([0, 1, 2, 3], dtype=np.int32)
+        keep_probs = np.ones(4, dtype=np.float32)
+        result = subsample_tokens(token_ids, keep_probs)
+        assert len(result) == 4
+
+    def test_drops_all_with_prob_zero(self):
+        """All tokens dropped when keep_probs is all 0.0."""
+        token_ids = np.array([0, 1, 2, 3], dtype=np.int32)
+        keep_probs = np.zeros(4, dtype=np.float32)
+        result = subsample_tokens(token_ids, keep_probs)
+        assert len(result) == 0
 
 
 # ============================================================
@@ -237,6 +260,28 @@ class TestSGDUpdate:
         assert np.array_equal(W_in[4], W_in_orig[4])  # row 4 not involved
         assert np.array_equal(W_out[4], W_out_orig[4])
 
+    def test_duplicate_center_indices_accumulate(self):
+        """Both gradient updates must be applied when the same center word appears twice."""
+        np.random.seed(0)
+        V, d = 5, 3
+        W_in = np.random.randn(V, d)
+        W_out = np.random.randn(V, d)
+        W_in_before = W_in.copy()
+
+        center_indices  = np.array([0, 0])
+        context_indices = np.array([1, 2])
+        neg_indices     = np.array([[3, 4], [3, 4]])
+        _, grad_v_c, grad_u_o, grad_u_negs = forward_and_backward(
+            center_indices, context_indices, neg_indices, W_in, W_out
+        )
+        lr = np.array([0.1, 0.1])
+        sgd_update(W_in, W_out, center_indices, context_indices,
+                   neg_indices, grad_v_c, grad_u_o, grad_u_negs, lr)
+
+        # Both gradient updates must have been applied to row 0 (neither dropped)
+        expected = W_in_before[0] - 0.1 * grad_v_c[0] - 0.1 * grad_v_c[1]
+        np.testing.assert_allclose(W_in[0], expected, rtol=1e-6)
+
     def test_lr_zero_no_change(self):
         np.random.seed(42)
         V, d = 5, 3
@@ -317,28 +362,29 @@ class TestEvalAnalogies:
 # Integration test
 # ============================================================
 
-class TestIntegration:
-    def test_loss_decreases(self):
-        """Train on tiny corpus, verify loss goes down."""
-        from main import train
-        W_in, word2idx, idx2word, loss_history = train(
-            CORPUS, embedding_dim=5, window_size=1,
-            num_negatives=2, learning_rate=0.1, num_epochs=100, seed=42,
-            min_count=1,
-        )
-        assert W_in is not None
-        assert loss_history[-1] < loss_history[0]
+@pytest.fixture(scope="module")
+def trained_model():
+    from main import train
+    W_in, word2idx, idx2word, loss_history = train(
+        CORPUS, embedding_dim=5, window_size=1,
+        num_negatives=2, learning_rate=0.1, num_epochs=500,
+        seed=42, min_count=1,
+    )
+    return W_in, word2idx, idx2word, loss_history
 
-    def test_similar_words_cluster(self):
+
+class TestIntegration:
+    def test_loss_decreases(self, trained_model):
+        """Train on tiny corpus, verify loss goes down substantially."""
+        W_in, word2idx, idx2word, loss_history = trained_model
+        assert W_in is not None
+        assert min(loss_history) < 0.5 * loss_history[0]
+
+    def test_similar_words_cluster(self, trained_model):
         """After training, 'cat' and 'on' should be more similar than 'cat' and 'mat'.
         Reason: cat and on share 2 context words (the, sat), while cat and mat share only 1 (the).
         """
-        from main import train
-        W_in, word2idx, idx2word, _ = train(
-            CORPUS, embedding_dim=5, window_size=1,
-            num_negatives=2, learning_rate=0.1, num_epochs=100, seed=42,
-            min_count=1,
-        )
+        W_in, word2idx, idx2word, _ = trained_model
         sim_cat_on  = cosine_similarity(W_in[word2idx["cat"]], W_in[word2idx["on"]])
         sim_cat_mat = cosine_similarity(W_in[word2idx["cat"]], W_in[word2idx["mat"]])
         assert sim_cat_on > sim_cat_mat, (

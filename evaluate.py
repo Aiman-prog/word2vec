@@ -12,7 +12,8 @@ def normalize_embeddings(W):
     Returns:
         W_normed: unit-length rows, shape (V, d)
     """
-    return W / np.linalg.norm(W, axis=1, keepdims=True)
+    norms = np.linalg.norm(W, axis=1, keepdims=True)
+    return W / np.maximum(norms, 1e-12)
 
 
 def cosine_similarity(vec_a, vec_b):
@@ -85,6 +86,36 @@ def analogy(word_a, word_b, word_c, word2idx, idx2word, W_normed):
     return idx2word[int(np.argmax(similarities))]
 
 
+def load_analogy_dataset(path):
+    """
+    Parse the Google Analogy dataset (questions-words.txt).
+
+    File format:
+        : category-name
+        word_a word_b word_c word_d
+        ...
+
+    Args:
+        path: path to questions-words.txt
+
+    Returns:
+        tests: list of (word_a, word_b, word_c, expected, category) tuples,
+               all lower-cased. Category header lines are skipped.
+    """
+    tests = []
+    category = "unknown"
+    with open(path) as f:
+        for line in f:
+            line = line.strip().lower()
+            if line.startswith(":"):
+                category = line[2:].strip()
+            elif line:
+                parts = line.split()
+                if len(parts) == 4:
+                    tests.append((parts[0], parts[1], parts[2], parts[3], category))
+    return tests
+
+
 def eval_analogies(tests, word2idx, idx2word, W_normed):
     """
     Evaluate analogy accuracy over a list of (a, b, c, expected) tuples.
@@ -103,7 +134,8 @@ def eval_analogies(tests, word2idx, idx2word, W_normed):
     """
     correct = 0
     total   = 0
-    for word_a, word_b, word_c, expected in tests:
+    for row in tests:
+        word_a, word_b, word_c, expected = row[:4]
         if not all(w in word2idx for w in (word_a, word_b, word_c, expected)):
             continue
         if analogy(word_a, word_b, word_c, word2idx, idx2word, W_normed) == expected:

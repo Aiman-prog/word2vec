@@ -43,7 +43,14 @@ def forward_and_backward(center_indices, context_indices, neg_indices, W_in, W_o
 
     # compute dot product scores for positive and negative pairs
     s_pos  = np.sum(V_batch * U_batch, axis=1)           
-    s_negs = np.einsum('bd,bkd->bk', V_batch, U_neg)      
+    # equivalent: (V_batch[:, None, :] * U_neg).sum(axis=-1)
+    # or as a loop:
+    #   for b in range(B):
+    #       for j in range(k):
+    #           s_negs[b, j] = np.dot(V_batch[b], U_neg[b, j])
+    # For each pair in the batch we have k negative samples, so U_neg is (B, k, d) and the result is (B, k).
+    # V_batch has shape (B, d), U_neg has shape (B, k, d).
+    s_negs = np.einsum('bd,bkd->bk', V_batch, U_neg)
 
     # apply sigmoid to scores to get probabilities
     sig_pos  = sigmoid(s_pos)   
@@ -55,8 +62,13 @@ def forward_and_backward(center_indices, context_indices, neg_indices, W_in, W_o
     # calculate gradients (via chain rule on the loss) 
     grad_u_o    = (sig_pos - 1)[:, None] * V_batch                       
     grad_u_negs = sig_negs[:, :, None] * V_batch[:, None, :]              
+    # equivalent: (sig_negs[:, :, None] * U_neg).sum(axis=1)
+    # or as a loop:
+    #   for b in range(B):
+    #       for j in range(k):
+    #           grad_v_c[b] += sig_negs[b, j] * U_neg[b, j]
     grad_v_c    = (sig_pos - 1)[:, None] * U_batch \
-                + np.einsum('bk,bkd->bd', sig_negs, U_neg)                
+                + np.einsum('bk,bkd->bd', sig_negs, U_neg)
 
     return loss, grad_v_c, grad_u_o, grad_u_negs
 
@@ -77,6 +89,6 @@ def sgd_update(W_in, W_out, center_indices, context_indices, neg_indices,
         grad_u_negs: shape (B, k, d)
         lr: learning rate array of shape (B,)
     """
-    W_in[center_indices]   -= lr[:, None]       * grad_v_c      
-    W_out[context_indices] -= lr[:, None]       * grad_u_o      
-    W_out[neg_indices]     -= lr[:, None, None] * grad_u_negs   
+    np.add.at(W_in,  center_indices,  -(lr[:, None]       * grad_v_c))
+    np.add.at(W_out, context_indices, -(lr[:, None]       * grad_u_o))
+    np.add.at(W_out, neg_indices,     -(lr[:, None, None] * grad_u_negs))

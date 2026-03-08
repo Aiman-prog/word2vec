@@ -10,7 +10,7 @@ from evaluate import cosine_similarity
 
 corpus = "the cat sat on the mat"
 
-W_in, word2idx, idx2word = train(
+W_in, word2idx, idx2word, _ = train(
     corpus,
     embedding_dim=5,
     window_size=1,
