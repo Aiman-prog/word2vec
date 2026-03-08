@@ -113,6 +113,8 @@ The gradient check in `test_word2vec.py` verifies all three against central fini
 
 ## Usage
 
+> **Quickstart**: open `demo.ipynb` for an end-to-end interactive walkthrough — smoke test, full training, visualisations, and evaluation all in one place. For the mathematical background (gradient derivation, loss function, why negative sampling), see `walkthrough.md`.
+
 ### Prerequisites
 
 ```bash
@@ -169,5 +171,6 @@ python3 -m pytest test_word2vec.py -v
 | `model.py` | Forward pass, SGNS loss, gradients (`forward_and_backward`), SGD update |
 | `evaluate.py` | Cosine similarity, nearest neighbours, analogies, analogy accuracy (`eval_analogies`) |
 | `main.py` | Training loop, model save/load |
-| `demo.ipynb` | Interactive demo: smoke test, full text8 training, loss curve, nearest neighbours, analogies |
+| `demo.ipynb` | Interactive walkthrough: smoke test on a 6-word corpus, full text8 training with loss and LR-decay curves, embedding visualisations (heatmaps, PCA), nearest neighbours, vector arithmetic, and analogy accuracy. **Start here to see the model train and evaluate end-to-end.** |
+| `walkthrough.md` | Theory companion: distributional hypothesis, skip-gram task, the embedding matrix, why full softmax is too slow, negative sampling, the SGNS loss, step-by-step gradient derivation, SGD update, and why the embeddings work. **Read this for the mathematical reasoning behind the implementation.** |
 | `test_word2vec.py` | 30 unit tests including gradient check |
